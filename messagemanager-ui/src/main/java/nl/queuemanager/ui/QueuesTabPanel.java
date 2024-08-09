@@ -33,9 +33,8 @@ import nl.queuemanager.jms.JMSDestination;
 import nl.queuemanager.jms.JMSQueue;
 import nl.queuemanager.ui.CommonUITasks.Segmented;
 import nl.queuemanager.core.tasks.FireRefreshRequiredTask.JMSDestinationHolder;
-import nl.queuemanager.ui.MessagesTable.MessageTableModel;
 import nl.queuemanager.ui.message.MessageViewerPanel;
-import nl.queuemanager.ui.util.HighlightsModel;
+import nl.queuemanager.ui.message.SearchPanel;
 import nl.queuemanager.ui.util.Holder;
 import nl.queuemanager.ui.util.QueueCountsRefresher;
 
@@ -52,7 +51,7 @@ import java.util.List;
 import java.util.TooManyListenersException;
 
 @SuppressWarnings("serial")
-public class QueuesTabPanel extends JSplitPane implements UITab {
+public class QueuesTabPanel extends JSplitPane implements UITab, MessageTableActions {
 	private JComboBox<JMSBroker> brokerCombo;
 	private QueueTable queueTable;
 	private MessagesTable messageTable;
@@ -90,7 +89,7 @@ public class QueuesTabPanel extends JSplitPane implements UITab {
 		this.messageViewer = messageViewer;
 		messageViewer.setDragEnabled(true);
 		
-		messageTable = createMessageTable(messageHighlighter);
+		messageTable = CommonUITasks.createMessageTable(messageHighlighter, eventBus, domain, this);
 		
 		// Panel for the connection selector combobox
 		JPanel connectionPanel = new JPanel();
@@ -203,11 +202,7 @@ public class QueuesTabPanel extends JSplitPane implements UITab {
 		});
 		CommonUITasks.makeSegmented(saveButton, Segmented.LAST);
 		messagesActionPanel.add(saveButton);
-
-		messagesActionPanel.add(Box.createHorizontalGlue());
-		
-		messagesActionPanel.add(CommonUITasks.createSearchField(eventBus));
-		
+		messagesActionPanel.add(new SearchPanel(messageTable, eventBus));
 		return messagesActionPanel;
 	}
 	
@@ -309,38 +304,7 @@ public class QueuesTabPanel extends JSplitPane implements UITab {
 		return table;
 	}
 
-	private MessagesTable createMessageTable(MessageHighlighter messageHighlighter) {
-		// Create the message table
-		MessagesTable table = new MessagesTable();
-		MessageTableModel tableModel = (MessageTableModel) table.getModel();
-		table.setHighlightsModel(new HighlightsModel<>(tableModel, messageHighlighter));
-		
-		ListSelectionModel selectionModel = table.getSelectionModel();
-		selectionModel.addListSelectionListener(new ListSelectionListener() {
-			public void valueChanged(ListSelectionEvent e) {
-				if (e.getValueIsAdjusting())
-					return;
-				// at least one message selected
-				displaySelectedMessage();
-			}
-		});
-		
-		table.addKeyListener(new KeyAdapter() {
-			@Override
-			public void keyTyped(KeyEvent e) {
-				if(e.getKeyChar() == KeyEvent.VK_DELETE) {
-					deleteSelectedMessages();
-				} else {
-					super.keyTyped(e);
-				}
-			}
-		});
-		
-		table.setDragEnabled(true);
-		
-		return table;
-	}
-	
+
 	private JComboBox<JMSBroker> createBrokerCombo() {
 		JComboBox<JMSBroker> cmb = new JComboBox<JMSBroker>();
 //		cmb.setMinimumSize(new Dimension(370, 30));
@@ -438,7 +402,7 @@ public class QueuesTabPanel extends JSplitPane implements UITab {
 		worker.execute(taskFactory.enumerateMessages(queue, qbel));
 	}
 		
-	private void displaySelectedMessage() {
+	public void displaySelectedMessage() {
 		if(messageTable.getSelectedRow() == -1) {
 			displayMessage(null);
 		} else {
@@ -477,7 +441,7 @@ public class QueuesTabPanel extends JSplitPane implements UITab {
 			taskFactory.enumerateQueues((JMSBroker)brokerCombo.getSelectedItem(), null));
 	}
 	
-	private void deleteSelectedMessages() {
+	public void deleteSelectedMessages() {
 		final JMSQueue queue = queueTable.getSelectedItem();
 		final List<Message> messages = CollectionFactory.newArrayList();
 		ListSelectionModel lsm = messageTable.getSelectionModel();
@@ -487,16 +451,32 @@ public class QueuesTabPanel extends JSplitPane implements UITab {
 		}
 		
 		int[] selectedIndexes = messageTable.getSelectedRows();
-		
+		final int firstSelectedIndex = selectedIndexes[0];
+
 		// Gather the messages to be removed from the queue.
 		for(int i: selectedIndexes) {
-			messages.add(messageTable.getRowItem(i));				
+			messages.add(messageTable.getRowItem(i));
 		}
-		
+
 		// Remove messages from the UI
 		for(Message m: messages) {
 			messageTable.removeItem(m);
 		}
+
+		// Select next message
+		int rowCount = messageTable.getRowCount();
+		SwingUtilities.invokeLater(() -> {
+			// Select next row
+			if (rowCount > 0) {
+				int selectIndex = firstSelectedIndex;
+				if (selectIndex >= rowCount) {
+					selectIndex = rowCount - 1;
+				}
+
+				messageTable.setRowSelectionInterval(selectIndex,selectIndex);
+				messageTable.scrollRectToVisible(messageTable.getCellRect(selectIndex, 0, true));
+			}
+		});
 
 		// Submit the removal task to the worker
 		worker.executeInOrder(

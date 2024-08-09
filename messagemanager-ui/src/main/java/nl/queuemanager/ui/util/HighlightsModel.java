@@ -4,6 +4,7 @@ import javax.swing.event.TableModelEvent;
 import javax.swing.event.TableModelListener;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
+import java.util.List;
 
 public class HighlightsModel<T> implements TableModelListener, HighlighterListener {
 	private final WeakReference<ListTableModel<? extends T>> tableModel;
@@ -31,10 +32,24 @@ public class HighlightsModel<T> implements TableModelListener, HighlighterListen
 	@Override
 	public void resetHighlights() {
 		if(tableModel.get() != null) {
-			tableModel.get().fireTableRowsUpdated(0, highlights.size()-1);
+			int rowCount = tableModel.get().getRowCount();
+			if (rowCount > 0) {
+				tableModel.get().fireTableRowsUpdated(0, rowCount - 1);
+			}
 		}
 	}
-	
+
+	public int getHighlightedRowCount() {
+		// return the number of rows that are highlighted
+		int count = 0;
+		for (int i=0; i<highlights.size(); i++) {
+			if(highlights.get(i)) {
+				count++;
+			}
+		}
+		return count;
+	}
+
 	@Override
 	public void tableChanged(TableModelEvent e) {
 		@SuppressWarnings("unchecked")
@@ -74,6 +89,22 @@ public class HighlightsModel<T> implements TableModelListener, HighlighterListen
 			}
 			break;
 		}
+
+		// now the highlights are up to date, so we can call all listeners
+		// call all listeners, so they can update their state and i.e. re-sort the table
+		for (TableModelListener listener : listeners) {
+			listener.tableChanged(e);
+		}
+	}
+
+	private List<TableModelListener> listeners = new ArrayList<>();
+
+	public void addTableModelListener(TableModelListener listener) {
+		listeners.add(listener);
+	}
+
+	public void removeTableModelListener(TableModelListener listener) {
+		listeners.remove(listener);
 	}
 	
 }

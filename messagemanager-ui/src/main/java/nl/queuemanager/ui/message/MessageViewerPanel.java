@@ -18,9 +18,10 @@ package nl.queuemanager.ui.message;
 import com.google.common.eventbus.EventBus;
 import com.google.inject.Inject;
 import nl.queuemanager.core.Pair;
-import nl.queuemanager.core.jms.JMSFeature;
+
 import nl.queuemanager.jms.JMSMultipartMessage;
 import nl.queuemanager.jms.JMSPart;
+import nl.queuemanager.jms.MetaDataProvider;
 import nl.queuemanager.ui.MessageListTransferable;
 import nl.queuemanager.ui.util.Highlighter;
 import nl.queuemanager.ui.util.HighlightsModel;
@@ -76,12 +77,23 @@ public class MessageViewerPanel extends JPanel implements TreeSelectionListener 
 		// Guice or Eventbus
 		eventBus.register(highlighter);
 	}
-	
+	private int[] previousTreeSelection = new int[0];
 	public void setMessage(Message message) {
 		this.message = message;
 		
 		int[] selectedRows = structureTree.getSelectionModel().getSelectionRows(); 
-		
+		if(message == null) {
+			// if a message is deleted we want to still remember the previous selection
+			previousTreeSelection = selectedRows;
+		}
+		else{
+			// check if we have a previous selection in case of no selection!
+			if(previousTreeSelection.length > 0 && selectedRows.length == 0) {
+				// if we have a previous selection, try to select the same rows as before
+				selectedRows = previousTreeSelection;
+			}
+		}
+
 		fillTree((DefaultMutableTreeNode)structureTree.getModel().getRoot(), message);
 		
 		// Try to select the same rows as before
@@ -100,6 +112,21 @@ public class MessageViewerPanel extends JPanel implements TreeSelectionListener 
 		root.removeAllChildren();
 
 		if(message != null) try {
+
+			// optional metadata
+			if(message instanceof MetaDataProvider && ((MetaDataProvider)message).getMetaData() != null) {
+				MessagePropertiesTable messageMetadataTable = new MessagePropertiesTable();
+				messageMetadataTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+				messageMetadataTable.setHighlightsModel(HighlightsModel.with(
+						(ListTableModel<? extends Pair<?, ?>>) messageMetadataTable.getModel(), highlighter));
+				messageMetadataTable.setProperties(((MetaDataProvider)message).getMetaData());
+				root.add(
+						new DefaultMutableTreeNode(
+								new TreeNodeInfo(
+										"Metadata",
+										new JScrollPane(messageMetadataTable))));
+
+			}
 
 			if(message.getJMSDestination() != null) {
 				JMSHeadersTable messageHeadersTable = new JMSHeadersTable();

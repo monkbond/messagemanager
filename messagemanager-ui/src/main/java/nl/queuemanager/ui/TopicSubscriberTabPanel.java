@@ -15,6 +15,7 @@
  */
 package nl.queuemanager.ui;
 
+import com.google.common.base.Strings;
 import com.google.common.eventbus.EventBus;
 import com.google.common.eventbus.Subscribe;
 import com.google.inject.Inject;
@@ -35,6 +36,7 @@ import nl.queuemanager.jms.JMSTopic;
 import nl.queuemanager.ui.CommonUITasks.Segmented;
 import nl.queuemanager.ui.MessagesTable.MessageTableModel;
 import nl.queuemanager.ui.message.MessageViewerPanel;
+import nl.queuemanager.ui.message.SearchPanel;
 import nl.queuemanager.ui.util.HighlightsModel;
 
 import javax.jms.Message;
@@ -58,7 +60,7 @@ import static nl.queuemanager.core.jms.DomainEvent.EVENT.TOPICS_ENUMERATED;
  *
  */
 @SuppressWarnings("serial")
-public class TopicSubscriberTabPanel extends JSplitPane implements UITab {
+public class TopicSubscriberTabPanel extends JSplitPane implements UITab,MessageTableActions {
 	private JComboBox brokerCombo;
 	private final JMSDomain domain;
 	private final TaskExecutor worker;
@@ -93,7 +95,7 @@ public class TopicSubscriberTabPanel extends JSplitPane implements UITab {
 		this.jmsSubscriberFactory = jmsSubscriberFactory;
 		
 		subscriberTable = createTopicTable(topicSubscriberTable);
-		messageTable = createMessageTable(messageHighlighter);
+		messageTable = CommonUITasks.createMessageTable(messageHighlighter, eventBus, domain, this);
 		this.messageViewer = messageViewer; 
 		messageViewer.setDragEnabled(true);
 		
@@ -130,8 +132,8 @@ public class TopicSubscriberTabPanel extends JSplitPane implements UITab {
 		messagesTablePanel.setLayout(new BoxLayout(messagesTablePanel, BoxLayout.Y_AXIS));
 		messagesTablePanel.setBorder(BorderFactory.createTitledBorder("Messages"));
 		messagesTablePanel.add(messageTableScrollPane);
-		messagesTablePanel.add(createMessagesActionPanel());
 
+		messagesTablePanel.add(createMessagesActionPanel());
 		
 		JSplitPane horizontalSplitPane = new JSplitPane();
 		horizontalSplitPane.setDividerLocation(350);
@@ -199,11 +201,7 @@ public class TopicSubscriberTabPanel extends JSplitPane implements UITab {
 		});
 		CommonUITasks.makeSegmented(saveButton, Segmented.LAST);		
 		messagesActionPanel.add(saveButton);
-		
-		messagesActionPanel.add(Box.createHorizontalGlue());
-
-		messagesActionPanel.add(CommonUITasks.createSearchField(eventBus));
-		
+		messagesActionPanel.add(new SearchPanel(messageTable,eventBus));
 		return messagesActionPanel;
 	}
 	
@@ -234,7 +232,7 @@ public class TopicSubscriberTabPanel extends JSplitPane implements UITab {
 	/**
 	 * Delete the messages currently selected in the message table
 	 */
-	private void deleteSelectedMessages() {
+	public void deleteSelectedMessages() {
 		final List<Message> messages = CollectionFactory.newArrayList();
 		final ListSelectionModel lsm = messageTable.getSelectionModel();
 		
@@ -243,7 +241,9 @@ public class TopicSubscriberTabPanel extends JSplitPane implements UITab {
 		}
 		
 		int[] selectedIndexes = messageTable.getSelectedRows();
-		
+		final int firstSelectedIndex = selectedIndexes[0];
+
+		// Gather the messages to be removed from the topic buffer
 		for(int i: selectedIndexes) {
 			Message message = messageTable.getRowItem(i);
 			messages.add(message);
@@ -251,10 +251,26 @@ public class TopicSubscriberTabPanel extends JSplitPane implements UITab {
 		
 		subscriberTable.getItemForDestination(messageTable.getCurrentDestination())
 			.removeMessages(messages);
-		
-		for(int i=selectedIndexes.length-1; i>=0; i--) {
-			messageTable.removeItem(messageTable.getRowItem(i));
+
+		// Remove messages from the UI
+		for(Message m: messages) {
+			messageTable.removeItem(m);
 		}
+
+		// Select next message
+		int rowCount = messageTable.getRowCount();
+		SwingUtilities.invokeLater(() -> {
+			// Select next row
+			if (rowCount > 0) {
+				int selectIndex = firstSelectedIndex;
+				if (selectIndex >= rowCount) {
+					selectIndex = rowCount - 1;
+				}
+
+				messageTable.setRowSelectionInterval(selectIndex,selectIndex);
+				messageTable.scrollRectToVisible(messageTable.getCellRect(selectIndex, 0, true));
+			}
+		});
 	}
 
 	private JComboBox createBrokerCombo() {
@@ -398,42 +414,7 @@ public class TopicSubscriberTabPanel extends JSplitPane implements UITab {
 			}
 		});
 	}
-	
-	private MessagesTable createMessageTable(MessageHighlighter messageHighlighter) {
-		// Create the message table
-		MessagesTable table = new MessagesTable();
-		MessageTableModel tableModel = (MessageTableModel) table.getModel();
-		table.setHighlightsModel(new HighlightsModel<>(tableModel, messageHighlighter));
-		// do not show the correlation id column if the feature is not supported
-		if(!domain.isFeatureSupported(JMSFeature.JMS_HEADERS)) {
-			table.removeColumn(table.getColumnModel().getColumn(2));
-		}
 
-		ListSelectionModel selectionModel = table.getSelectionModel();
-		selectionModel.addListSelectionListener(new ListSelectionListener() {
-			public void valueChanged(ListSelectionEvent e) {
-				if (e.getValueIsAdjusting())
-					return;
-				
-				displaySelectedMessage();
-			}
-		});
-		
-		table.addKeyListener(new KeyAdapter() {
-			@Override
-			public void keyTyped(KeyEvent e) {
-				if(e.getKeyChar() == KeyEvent.VK_DELETE) {
-					deleteSelectedMessages();
-				} else {
-					super.keyTyped(e);
-				}
-			}
-		});
-		
-		table.setDragEnabled(true);
-		
-		return table;
-	}
 	
 	private void removeSelectedSubscribers() {
 		int rows[] = subscriberTable.getSelectedRows();
@@ -448,7 +429,7 @@ public class TopicSubscriberTabPanel extends JSplitPane implements UITab {
 		}
 	}
 	
-	private void displaySelectedMessage() {
+	public void displaySelectedMessage() {
 		if(messageTable.getSelectedRow() == -1) {
 			displayMessage(null);
 		} else {
