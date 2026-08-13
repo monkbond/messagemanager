@@ -22,6 +22,7 @@ import javax.jms.JMSException;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.ObjectOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashMap;
@@ -63,7 +64,7 @@ public class JMSPartImpl implements JMSPart {
 
 	/**
 	 * If the content of this part is a byte[], return the byte[]. If it is a String, return
-	 * String.getBytes(). If it is neither return the serialized form of the content object (if 
+	 * its UTF-8 bytes. If it is neither return the serialized form of the content object (if
 	 * Serializable).
 	 * <P>
 	 * If none of the above apply, throws RuntimeException
@@ -73,7 +74,9 @@ public class JMSPartImpl implements JMSPart {
 			return (byte[])content;
 		
 		if(String.class.isAssignableFrom(content.getClass()))
-			return ((String)content).getBytes();
+			// Explicit UTF-8: the JVM default charset would silently corrupt any
+			// character it cannot represent (cp1252 on a typical Windows install).
+			return ((String)content).getBytes(StandardCharsets.UTF_8);
 		
 		try {
 			ByteArrayOutputStream bos = new ByteArrayOutputStream();

@@ -65,10 +65,17 @@ fi
 
 echo Launching: $LAUNCHER_JAVA
 
+# NOTE: $JVM_OPTS must NOT be quoted here. Quoting it passes every option as a
+# SINGLE argument, which the JVM reads as one -D whose value is the rest of the
+# string - so all but the first option are silently ignored.
+# -Dfile.encoding is set explicitly (and before $JVM_OPTS, so it can still be
+# overridden there) because the bundled JRE is 17, where the default charset
+# follows the OS locale. Without it, message content is written with whatever
+# the platform charset happens to be and unrepresentable characters are lost.
 if [ "$1" = "debug" ]; then
-    "$LAUNCHER_JAVA" "$JVM_OPTS" -Ddeveloper=true -p bootstrap/update4j.jar --add-modules jdk.unsupported,java.scripting,java.net.http,java.sql,java.naming,java.compiler -m org.update4j/org.update4j.Bootstrap --remote $UPDATE_URL --syncLocal --local setup.xml --launchFirst
+    "$LAUNCHER_JAVA" -Dfile.encoding=UTF-8 $JVM_OPTS -Ddeveloper=true -p bootstrap/update4j.jar --add-modules jdk.unsupported,java.scripting,java.net.http,java.sql,java.naming,java.compiler -m org.update4j/org.update4j.Bootstrap --remote $UPDATE_URL --syncLocal --local setup.xml --launchFirst
 elif [ "$1" = "rdebug" ]; then
-    "$LAUNCHER_JAVA" "$JVM_OPTS" -Ddeveloper=true -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005 -p bootstrap/update4j.jar --add-modules jdk.unsupported,java.scripting,java.net.http,java.sql,java.naming,java.compiler -m org.update4j/org.update4j.Bootstrap --remote $UPDATE_URL --syncLocal --local setup.xml --launchFirst
+    "$LAUNCHER_JAVA" -Dfile.encoding=UTF-8 $JVM_OPTS -Ddeveloper=true -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005 -p bootstrap/update4j.jar --add-modules jdk.unsupported,java.scripting,java.net.http,java.sql,java.naming,java.compiler -m org.update4j/org.update4j.Bootstrap --remote $UPDATE_URL --syncLocal --local setup.xml --launchFirst
 else
-    "$LAUNCHER_JAVA" "$JVM_OPTS" -p bootstrap/update4j.jar --add-modules jdk.unsupported,java.scripting,java.net.http,java.sql,java.naming,java.compiler -m org.update4j/org.update4j.Bootstrap --remote $UPDATE_URL --syncLocal --local setup.xml --launchFirst
+    "$LAUNCHER_JAVA" -Dfile.encoding=UTF-8 $JVM_OPTS -p bootstrap/update4j.jar --add-modules jdk.unsupported,java.scripting,java.net.http,java.sql,java.naming,java.compiler -m org.update4j/org.update4j.Bootstrap --remote $UPDATE_URL --syncLocal --local setup.xml --launchFirst
 fi

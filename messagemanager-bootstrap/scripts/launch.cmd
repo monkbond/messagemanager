@@ -31,10 +31,14 @@ if exist ".\bin\cleanup.cmd" call ".\bin\cleanup.cmd"
 rem allow user to set additional JVM options i.e. truststore
 if exist ".\bin\setenv.cmd" call ".\bin\setenv.cmd"
 
+rem -Dfile.encoding is set explicitly (and before %JVM_OPTS%, so it can still be
+rem overridden there) because the bundled JRE is 17, where the default charset
+rem follows the OS locale - windows-1252 on a typical install. Without it, message
+rem content is written in that charset and unrepresentable characters are lost.
 if "%~1"=="debug" (
-    call %LAUNCHER_JAVA_DEBUG% %JVM_OPTS% -Ddeveloper=true -p bootstrap\update4j.jar --add-modules jdk.attach,jdk.unsupported,java.scripting,java.net.http,java.sql,java.naming,java.compiler -m org.update4j/org.update4j.Bootstrap --remote %UPDATE_URL% --syncLocal --local setup.xml --launchFirst
+    call %LAUNCHER_JAVA_DEBUG% -Dfile.encoding=UTF-8 %JVM_OPTS% -Ddeveloper=true -p bootstrap\update4j.jar --add-modules jdk.attach,jdk.unsupported,java.scripting,java.net.http,java.sql,java.naming,java.compiler -m org.update4j/org.update4j.Bootstrap --remote %UPDATE_URL% --syncLocal --local setup.xml --launchFirst
 ) else if "%~1"=="rdebug" (
-    call %LAUNCHER_JAVA_DEBUG% %JVM_OPTS% -Ddeveloper=true -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005 -p bootstrap\update4j.jar --add-modules jdk.attach,jdk.unsupported,java.scripting,java.net.http,java.sql,java.naming,java.compiler -m org.update4j/org.update4j.Bootstrap --remote %UPDATE_URL% --syncLocal --local setup.xml --launchFirst
+    call %LAUNCHER_JAVA_DEBUG% -Dfile.encoding=UTF-8 %JVM_OPTS% -Ddeveloper=true -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005 -p bootstrap\update4j.jar --add-modules jdk.attach,jdk.unsupported,java.scripting,java.net.http,java.sql,java.naming,java.compiler -m org.update4j/org.update4j.Bootstrap --remote %UPDATE_URL% --syncLocal --local setup.xml --launchFirst
 ) else (
-    start %LAUNCHER_JAVA% %JVM_OPTS% -p bootstrap\update4j.jar --add-modules jdk.attach,jdk.unsupported,java.scripting,java.net.http,java.sql,java.naming,java.compiler -m org.update4j/org.update4j.Bootstrap --remote %UPDATE_URL% --syncLocal --local setup.xml --launchFirst
+    start %LAUNCHER_JAVA% -Dfile.encoding=UTF-8 %JVM_OPTS% -p bootstrap\update4j.jar --add-modules jdk.attach,jdk.unsupported,java.scripting,java.net.http,java.sql,java.naming,java.compiler -m org.update4j/org.update4j.Bootstrap --remote %UPDATE_URL% --syncLocal --local setup.xml --launchFirst
 )

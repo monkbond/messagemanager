@@ -39,6 +39,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.List;
 
@@ -185,8 +186,9 @@ public class SendFileListTask extends Task implements CancelableTask {
 			MessageFactory.copyProperties(template, message);
 		}
 		
-		// FIXME This uses the JVM default encoding to convert to a String.
-		message.setText(new String(content));
+		// Explicit UTF-8: the JVM default charset would silently corrupt any
+		// character it cannot represent (cp1252 on a typical Windows install).
+		message.setText(new String(content, StandardCharsets.UTF_8));
 		
 		return message;
 	}

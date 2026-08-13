@@ -34,6 +34,7 @@ import javax.xml.xpath.XPathConstants;
 import javax.xml.xpath.XPathExpressionException;
 import javax.xml.xpath.XPathFactory;
 import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.Enumeration;
 
@@ -445,7 +446,8 @@ public abstract class BaseMessage implements SaveableMessage {
 		boolean useFileRef = Boolean.parseBoolean(getAttributeValue(bodyNode, "use-file-ref"));
 		
 		if(useFileRef) {
-			message.setText(new String(resolveFileRef(esbmsgFile, fileRef)));
+			// Explicit UTF-8 - matches how the save path writes these files.
+			message.setText(new String(resolveFileRef(esbmsgFile, fileRef), StandardCharsets.UTF_8));
 		} else {
 			message.setText(bodyNode.getTextContent());
 		}
@@ -510,7 +512,9 @@ public abstract class BaseMessage implements SaveableMessage {
 			JMSPart messagePart;
 			if(useFileRef) {
 				if (contentType.startsWith(CONTENT_ANYTEXT)) {
-					message.addPart(messagePart=message.createPart(new String(resolveFileRef(esbmsgFile, fileRef)), contentType));
+					// Explicit UTF-8 - matches how the save path writes these files.
+					message.addPart(messagePart=message.createPart(
+							new String(resolveFileRef(esbmsgFile, fileRef), StandardCharsets.UTF_8), contentType));
 				} else {
 					message.addPart(messagePart=message.createPart(resolveFileRef(esbmsgFile, fileRef), contentType));
 				}

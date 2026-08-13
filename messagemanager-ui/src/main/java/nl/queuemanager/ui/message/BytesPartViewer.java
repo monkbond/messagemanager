@@ -2,6 +2,8 @@ package nl.queuemanager.ui.message;
 
 import nl.queuemanager.jms.JMSPart;
 
+import java.nio.charset.StandardCharsets;
+
 class BytesPartViewer extends HexEditorContentViewer<JMSPart> implements MessagePartContentViewer {
 	
 	@Override
@@ -12,7 +14,9 @@ class BytesPartViewer extends HexEditorContentViewer<JMSPart> implements Message
 			if(byte[].class.isAssignableFrom(content.getClass())) {
 				return (byte[])content;
 			} else {
-				return content.toString().getBytes();
+				// Explicit UTF-8 so the hex view shows the same bytes the save path
+				// writes, instead of whatever the platform charset would produce.
+				return content.toString().getBytes(StandardCharsets.UTF_8);
 			}
 		} else {
 			return new byte[] {};
