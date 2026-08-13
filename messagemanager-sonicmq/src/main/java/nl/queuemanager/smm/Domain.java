@@ -58,6 +58,10 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.*;
 import java.util.Map.Entry;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 @Singleton
 public class Domain implements JMSDomain {
@@ -189,10 +193,12 @@ public class Domain implements JMSDomain {
 		brokerList.clear();
 		int brokersFound = 0;
 		try {
-			IDirectoryFileSystemService dsProxy = getDirectoryFilesystemService();
-			MQMgmtBeanFactory domain = new MQMgmtBeanFactory();
-			domain.connect(dsProxy);
-	
+			// The collective state is a single management request that contains
+			// everything needed to list the brokers in the domain. Resolving the
+			// connection URL requires loading configuration beans from the
+			// Directory Service, which takes many management round trips per
+			// broker; that is deferred until a broker is selected (see
+			// resolveBrokerUrl), as is the replication state check.
 			IAgentManagerProxy amp = model.getAgentManager();
 			IContainerState[] states = (IContainerState[]) amp.getCollectiveState();
 
@@ -200,88 +206,164 @@ public class Domain implements JMSDomain {
 				// Skip offline containers
 				if(containerState.getState() != IContainerState.STATE_ONLINE)
 					continue;
-				IComponentState[] cstates = containerState.getComponentStates();
-				
-				component:
-				for(IComponentState componentState: cstates) {
+
+				for(IComponentState componentState: containerState.getComponentStates()) {
 					// Skip offline components
 					if(componentState.getState() != IComponentState.STATE_ONLINE)
-						continue component;
-					
+						continue;
+
 					IIdentity ri = componentState.getRuntimeIdentity();
 					IElementIdentity ci = ri.getConfigIdentity();
-					
+
+					final SonicMQBroker.ROLE role;
 					if(IBrokerConstants.DS_TYPE.equals(ci.getType())) {
-						ObjectName boname = new ObjectName(ri.getCanonicalName());
-																		
-						String logicalName = dsProxy.storageToLogical(ci.getName());
-						logicalName = logicalName.substring(0, logicalName.lastIndexOf('/'));
-	//					System.out.println("LogicalName: " + logicalName);
-						IBrokerBean broker = null;
-						try {
-							broker = domain.getBrokerBean(logicalName);
-						// Find all acceptors for this broker and use the first TCP acceptor
-						IAcceptorTcpsBean acceptor = getPrimaryAcceptor(broker.getAcceptorsBean());
-						if(acceptor != null) {
-							SonicMQBroker brokerData = new SonicMQBroker(
-									boname,
-									broker.getBrokerName(),
-									getAcceptorUrl(containerState.getContainerHost(), acceptor),
-									SonicMQBroker.ROLE.PRIMARY);
-							
-							if(isBrokerOnline(brokerData)) {
-								brokerList.add(brokerData);
-								brokersFound++;
-							}					
-						}
-						
-						} catch (MgmtException e) {
-							continue component;
-						}
+						role = SonicMQBroker.ROLE.PRIMARY;
 					} else if(IBackupBrokerConstants.DS_TYPE.equals(ci.getType())) {
-						ObjectName boname = new ObjectName(ri.getCanonicalName());
-						
-						String logicalName = dsProxy.storageToLogical(ci.getName());
-						logicalName = logicalName.substring(0, logicalName.lastIndexOf('/'));
-	//					System.out.println("LogicalName: " + logicalName);
-						IBackupBrokerBean broker = null;
-						try{
-							broker = domain.getBackupBrokerBean(logicalName);
-						
-						// Find all acceptors for this broker and use the first TCP acceptor
-							IAcceptorTcpsBean acceptor = getPrimaryAcceptor(broker.getAcceptorsBean());
-							if(acceptor != null) {
-								SonicMQBroker brokerData = new SonicMQBroker(
-									boname,
-									broker.getPrimaryBrokerBean().getBrokerName() + " (Backup)",
-									getAcceptorUrl(containerState.getContainerHost(), acceptor),
-									SonicMQBroker.ROLE.BACKUP);
-							
-								if(isBrokerOnline(brokerData)) {
-									brokerList.add(brokerData);
-									brokersFound++;
-								}
-							}
-						} catch (MgmtException e) {							
-							continue component;
-						}
+						role = SonicMQBroker.ROLE.BACKUP;
+					} else {
+						continue;
 					}
+
+					ObjectName boname = new ObjectName(ri.getCanonicalName());
+
+					String brokerName = boname.getKeyProperty("ID");
+					if(brokerName == null) {
+						brokerName = ci.getName();
+					}
+					if(role == SonicMQBroker.ROLE.BACKUP) {
+						brokerName = brokerName + " (Backup)";
+					}
+
+					brokerList.add(new SonicMQBroker(
+							boname,
+							brokerName,
+							ci.getName(),
+							containerState.getContainerHost(),
+							role));
+					brokersFound++;
 				}
 			}
-			
-			dispatchEvent(new DomainEvent(EVENT.BROKERS_ENUMERATED, getBrokerList(), this));
+
+			// Dispatch a copy: filterOfflineBrokers may remove entries from
+			// brokerList while the UI is still reading this event's list.
+			dispatchEvent(new DomainEvent(EVENT.BROKERS_ENUMERATED, new ArrayList<>(brokerList), this));
 			if(brokersFound == 0){
 				throw new MgmtException("No Brokers Found ... you have possibly not enough privileges");
 			}
+
+			filterOfflineBrokers();
 			return getBrokerList();
-		} 
+		}
 		catch (MgmtException e) {
-			//is the case if not administrator priviledged or specifically denied access 
+			//is the case if not administrator priviledged or specifically denied access
 			//as is the case in a secure SDM deployment.
 			throw new BrokerEnumerationException(e);
 		}
-		catch (DirectoryServiceException e) {
-			throw new BrokerEnumerationException(e);
+	}
+
+	/**
+	 * Remove brokers that are not active (offline or standby replicas) from the
+	 * broker list and dispatch an updated BROKERS_ENUMERATED event if any were
+	 * removed. The unfiltered list is published before this runs so that large
+	 * domains show a broker list quickly; checking the replication state costs
+	 * two management round trips per broker. Runs inside the enumeration task,
+	 * which executes on the domain resource queue and therefore does not block
+	 * broker connects (those run on their own resource queue).
+	 */
+	private void filterOfflineBrokers() {
+		List<SonicMQBroker> candidates = new ArrayList<>(brokerList);
+
+		// One thread for the typical small domain; scale up only when there are
+		// enough brokers for the check to take long otherwise (~200ms/broker
+		// over WAN), capped at 8 for very large domains.
+		int threads = Math.max(1, Math.min(8, candidates.size() / 25));
+		ExecutorService pool = Executors.newFixedThreadPool(
+				threads,
+				runnable -> {
+					Thread thread = new Thread(runnable, "SonicMQ broker state check");
+					thread.setDaemon(true);
+					return thread;
+				});
+
+		List<SonicMQBroker> online = new ArrayList<>();
+		try {
+			List<Future<Boolean>> results = new ArrayList<>();
+			for(final SonicMQBroker broker: candidates) {
+				results.add(pool.submit(() -> isBrokerOnline(broker)));
+			}
+			for(int i = 0; i < candidates.size(); i++) {
+				try {
+					if(results.get(i).get()) {
+						online.add(candidates.get(i));
+					}
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					return;
+				} catch (ExecutionException e) {
+					// Failed to determine the state, treat the broker as offline
+				}
+			}
+		} finally {
+			pool.shutdownNow();
+		}
+
+		// Don't publish a stale update when the domain was disconnected while
+		// the states were being checked.
+		if(model == null)
+			return;
+
+		if(online.size() != candidates.size()) {
+			brokerList.retainAll(online);
+			dispatchEvent(new DomainEvent(EVENT.BROKERS_ENUMERATED, new ArrayList<>(brokerList), this));
+		}
+	}
+
+	/**
+	 * Resolve the JMS connection URL of a broker by loading its configuration
+	 * beans from the Directory Service. Deliberately done lazily on first
+	 * connect instead of during enumeration: it costs many management round
+	 * trips per broker, which makes enumerating large domains take minutes.
+	 */
+	private void resolveBrokerUrl(SonicMQBroker broker) throws JMSException {
+		if(broker.getBrokerURL() != null)
+			return;
+
+		try {
+			IDirectoryFileSystemService dsProxy = getDirectoryFilesystemService();
+			MQMgmtBeanFactory beanFactory = new MQMgmtBeanFactory();
+			beanFactory.connect(dsProxy);
+
+			String logicalName = dsProxy.storageToLogical(broker.getConfigStorageName());
+			logicalName = logicalName.substring(0, logicalName.lastIndexOf('/'));
+
+			// Find all acceptors for this broker and use the first TCP acceptor
+			IAcceptorsBean acceptorsBean;
+			if(broker.getRole() == SonicMQBroker.ROLE.BACKUP) {
+				acceptorsBean = beanFactory.getBackupBrokerBean(logicalName).getAcceptorsBean();
+			} else {
+				acceptorsBean = beanFactory.getBrokerBean(logicalName).getAcceptorsBean();
+			}
+
+			IAcceptorTcpsBean acceptor = getPrimaryAcceptor(acceptorsBean);
+			if(acceptor == null) {
+				throw new JMSException("No usable TCP acceptor found for broker " + broker.getBrokerName());
+			}
+
+			broker.setBrokerURL(getAcceptorUrl(broker.getContainerHost(), acceptor));
+		} catch (MgmtException | DirectoryServiceException | MalformedObjectNameException e) {
+			// An alternate URL configured by the user still allows connecting
+			// when the acceptor configuration cannot be read.
+			String alternateUrl = config.getBrokerPref(
+					broker, CoreConfiguration.PREF_BROKER_ALTERNATE_URL, null);
+			if(alternateUrl != null && alternateUrl.length() > 0) {
+				broker.setBrokerURL(alternateUrl);
+				return;
+			}
+
+			JMSException jmse = new JMSException(
+					"Unable to determine the connection URL for broker " + broker.getBrokerName() + ": " + e);
+			jmse.setLinkedException(e);
+			throw jmse;
 		}
 	}
 
@@ -603,14 +685,21 @@ public class Domain implements JMSDomain {
 	 */
 	public void connectToBroker(JMSBroker aBroker, Credentials credentials) throws JMSException {
 		SonicMQBroker broker = (SonicMQBroker)aBroker;
-		
+
 		if(brokerConnections.get(broker) == null) {
+			// This check was part of broker enumeration; it is done lazily now
+			// so that enumerating a large domain stays fast.
+			if(!isBrokerOnline(broker)) {
+				throw new JMSException("Broker " + broker.getBrokerName() +
+						" is not active (offline or standby replica)");
+			}
+			resolveBrokerUrl(broker);
 			if(credentials == null)
 				credentials = getDefaultCredentials(broker);
 			connectJMS(broker, credentials);
 		}
-		
-		dispatchEvent(new DomainEvent(EVENT.BROKER_CONNECT, broker, this));		
+
+		dispatchEvent(new DomainEvent(EVENT.BROKER_CONNECT, broker, this));
 	}
 	
 	/**

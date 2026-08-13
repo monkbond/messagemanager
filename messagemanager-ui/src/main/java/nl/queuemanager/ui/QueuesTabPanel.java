@@ -366,12 +366,20 @@ public class QueuesTabPanel extends JSplitPane implements UITab, MessageTableAct
 	private void populateBrokerCombo(final List<JMSBroker> brokers) {
 		SwingUtilities.invokeLater(new Runnable() {
 			public void run() {
+				// copy to avoid concurrent modification exception
+				final List<JMSBroker> updatedBrokers = new ArrayList<>(brokers);
+				Collections.sort(updatedBrokers);
+
+				// When the selected broker is still present, update the combo in
+				// place without firing selection events so a refreshed broker
+				// list does not disturb whatever the user is doing.
+				if(CommonUITasks.updateComboItems(brokerCombo, updatedBrokers))
+					return;
+
 				brokerCombo.removeAllItems();
 
 				if(!brokers.isEmpty()) {
-					// copy to avoid concurrent modification exception
-					final List<JMSBroker> sortedBrokers = new ArrayList<>(brokers);
-					Collections.sort(sortedBrokers);
+					final List<JMSBroker> sortedBrokers = updatedBrokers;
 
 					// get previously selected broker before adding new brokers which will trigger a selection event
 					String previouslySelectedBroker = config.getUserPref(CoreConfiguration.PREF_LAST_SELECTED_BROKER, null);

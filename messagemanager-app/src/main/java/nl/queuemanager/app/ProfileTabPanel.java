@@ -60,6 +60,12 @@ public class ProfileTabPanel extends JPanel implements UITab {
 
 	private JButton activateProfileButton;
 
+	// A profile can only be activated once per run: this tab is removed when the
+	// profile activates and is never shown again. Activating twice would create a
+	// second set of plugin objects that stay subscribed to the event bus, causing
+	// duplicate work and errors from the abandoned ones. Only read/written on the EDT.
+	private boolean profileActivationStarted;
+
 	private final ProfileManager profileManager;
 	private final CoreConfiguration config;
 	private final PlatformHelper platform;
@@ -367,7 +373,7 @@ public class ProfileTabPanel extends JPanel implements UITab {
 		
 		profilesList.addMouseListener(new MouseAdapter() {
 		    public void mouseClicked(MouseEvent e) {
-		        if (e.getClickCount() == 2) {
+		        if (e.getClickCount() == 2 && !profileActivationStarted) {
 		            int index = profilesList.locationToIndex(e.getPoint());
 		            Profile item = profilesModel.getElementAt(index);
 		            if(item != null) {
@@ -408,8 +414,17 @@ public class ProfileTabPanel extends JPanel implements UITab {
 	}
 	
 	private void activateProfile(final Profile profile, boolean setAsAutoload) {
+		// Activation is asynchronous and this tab stays visible until it completes,
+		// so refuse any further attempts instead of activating a second time.
+		if(profileActivationStarted) {
+			return;
+		}
+		profileActivationStarted = true;
+		activateProfileButton.setEnabled(false);
+		activateProfileButton.setToolTipText("Activating profile " + profile.getName() + "...");
+
 		List<Task> tasks = new ArrayList<>();
-		tasks.add(taskFactory.activateProfile(profile)); 
+		tasks.add(taskFactory.activateProfile(profile));
 		if(setAsAutoload) {
 			tasks.add(taskFactory.setUserPref(PREF_AUTOLOAD_PROFILE, profile.getId()));
 		}
@@ -432,7 +447,9 @@ public class ProfileTabPanel extends JPanel implements UITab {
 			
 			btnAddClasspath.setEnabled(true);
 			btnRemoveClasspath.setEnabled(true);
-			if(selectedProfile.getClasspath().size() > 0) {
+			if(profileActivationStarted) {
+				// Keep the button disabled, a profile is already being activated
+			} else if(selectedProfile.getClasspath().size() > 0) {
 				activateProfileButton.setEnabled(true);
 				activateProfileButton.setToolTipText("");
 			} else {

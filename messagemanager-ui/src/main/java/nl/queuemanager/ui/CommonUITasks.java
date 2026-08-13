@@ -63,7 +63,60 @@ public class CommonUITasks {
 			}
 		});
 	}
-	
+
+	/**
+	 * Update a combo box to contain exactly the given (sorted) items while
+	 * keeping the current selection, without firing any selection events.
+	 * Domains may publish a refreshed broker list while the user is working;
+	 * rebuilding the combo would fire selection events with disruptive side
+	 * effects (tables cleared, connects and enumerations triggered, prepared
+	 * sends redirected).
+	 * <p>
+	 * Must be called on the EDT.
+	 *
+	 * @return true when the combo was updated in place. False when the caller
+	 *         should fall back to a full rebuild: nothing is selected, or the
+	 *         selected item is not in the new list.
+	 */
+	public static <T> boolean updateComboItems(final JComboBox<T> combo, final List<T> sortedItems) {
+		Object selected = combo.getSelectedItem();
+		if(selected == null || !sortedItems.contains(selected))
+			return false;
+
+		// Remove items that are no longer present (never the selected one)
+		for(int i = combo.getItemCount() - 1; i >= 0; i--) {
+			if(!sortedItems.contains(combo.getItemAt(i))) {
+				combo.removeItemAt(i);
+			}
+		}
+
+		// Insert new items at their position in the sorted list. The remaining
+		// combo items are a subsequence of sortedItems, so the insertion index
+		// is right after the last combo item that precedes the new item.
+		for(int newIndex = 0; newIndex < sortedItems.size(); newIndex++) {
+			T item = sortedItems.get(newIndex);
+
+			boolean present = false;
+			int insertAt = 0;
+			for(int i = 0; i < combo.getItemCount(); i++) {
+				T existing = combo.getItemAt(i);
+				if(item.equals(existing)) {
+					present = true;
+					break;
+				}
+				if(sortedItems.indexOf(existing) < newIndex) {
+					insertAt = i + 1;
+				}
+			}
+
+			if(!present) {
+				combo.insertItemAt(item, insertAt);
+			}
+		}
+
+		return true;
+	}
+
 	/**
 	 * Create a JButton with some standard settings and an actionListener.
 	 * 

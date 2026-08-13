@@ -338,12 +338,18 @@ public class TopicSubscriberTabPanel extends JSplitPane implements UITab,Message
 	private void populateBrokerCombo(final List<JMSBroker> brokers) {
 		SwingUtilities.invokeLater(new Runnable() {
 			public void run() {
+				// copy to avoid concurrent modification exception
+				final List<JMSBroker> sortedBrokers = new ArrayList<>(brokers);
+				Collections.sort(sortedBrokers);
+
+				// When the selected broker is still present, update the combo in
+				// place without firing selection events so a refreshed broker
+				// list does not disturb active subscriptions.
+				if(CommonUITasks.updateComboItems(brokerCombo, sortedBrokers))
+					return;
+
 				brokerCombo.removeAllItems();
 				if(!brokers.isEmpty()) {
-					// copy to avoid concurrent modification exception
-					final List<JMSBroker> sortedBrokers = new ArrayList<>(brokers);
-					Collections.sort(sortedBrokers);
-
 					for(JMSBroker broker: sortedBrokers) {
 						brokerCombo.addItem(broker);
 					}

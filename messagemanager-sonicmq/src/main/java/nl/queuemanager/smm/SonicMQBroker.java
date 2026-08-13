@@ -24,17 +24,23 @@ class SonicMQBroker implements Comparable<JMSBroker>, JMSBroker {
 		PRIMARY,
 		BACKUP
 	}
-	
+
 	private final ObjectName objectName;
 	private final String brokerName;
-	private final String brokerURL;	
+	private final String configStorageName;
+	private final String containerHost;
 	private final ROLE role;
 
-	public SonicMQBroker(ObjectName objectName, String brokerName, String connectionUrl, ROLE role) {
-		this.objectName = objectName;
-		this.brokerName = brokerName;
-		this.brokerURL  = sanitizeBrokerUrl(connectionUrl);
-		this.role       = role;
+	// Resolved lazily on first connect; enumerating acceptor configuration for
+	// every broker makes listing large domains take minutes.
+	private volatile String brokerURL;
+
+	public SonicMQBroker(ObjectName objectName, String brokerName, String configStorageName, String containerHost, ROLE role) {
+		this.objectName        = objectName;
+		this.brokerName        = brokerName;
+		this.configStorageName = configStorageName;
+		this.containerHost     = containerHost;
+		this.role              = role;
 	}
 
 	private String sanitizeBrokerUrl(String connectionUrl) {
@@ -46,8 +52,24 @@ class SonicMQBroker implements Comparable<JMSBroker>, JMSBroker {
 		return brokerName;
 	}
 
+	/**
+	 * The JMS connection URL for this broker, or null when it has not been
+	 * resolved yet.
+	 */
 	public String getBrokerURL() {
 		return brokerURL;
+	}
+
+	public void setBrokerURL(String connectionUrl) {
+		this.brokerURL = sanitizeBrokerUrl(connectionUrl);
+	}
+
+	public String getConfigStorageName() {
+		return configStorageName;
+	}
+
+	public String getContainerHost() {
+		return containerHost;
 	}
 
 	public ObjectName getObjectName() {
@@ -60,19 +82,20 @@ class SonicMQBroker implements Comparable<JMSBroker>, JMSBroker {
 
 	@Override
 	public String toString() {
-		return getBrokerName() + " (" + getBrokerURL() + ")";
+		// Must be stable regardless of whether the URL has been resolved yet:
+		// this value is the display name and the per-broker preferences key.
+		return getBrokerName();
 	}
 
 	public int compareTo(JMSBroker other) {
 		return toString().compareTo(other.toString());
 	}
-	
+
 	@Override
 	public int hashCode() {
 		final int PRIME = 31;
 		int result = 1;
 		result = PRIME * result + ((brokerName == null) ? 0 : brokerName.hashCode());
-		result = PRIME * result + ((brokerURL == null) ? 0 : brokerURL.hashCode());
 		result = PRIME * result + ((objectName == null) ? 0 : objectName.hashCode());
 		result = PRIME * result + ((role == null) ? 0 : role.hashCode());
 		return result;
@@ -91,11 +114,6 @@ class SonicMQBroker implements Comparable<JMSBroker>, JMSBroker {
 			if (other.brokerName != null)
 				return false;
 		} else if (!brokerName.equals(other.brokerName))
-			return false;
-		if (brokerURL == null) {
-			if (other.brokerURL != null)
-				return false;
-		} else if (!brokerURL.equals(other.brokerURL))
 			return false;
 		if (objectName == null) {
 			if (other.objectName != null)
