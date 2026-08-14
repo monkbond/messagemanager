@@ -124,7 +124,7 @@ class CoreXmlConfiguration extends XmlFileConfiguration implements CoreConfigura
 				@Override
 				public String apply(Element prefs) throws Exception {
 					final String expr = String.format("/c:%s/c:Broker[@name='%s']/c:%s", 
-							rootElementName, broker.toString(), key);
+							rootElementName, broker.getPreferenceKey(), key);
 					return (String)xp.evaluate(expr, prefs, XPathConstants.STRING);
 				}
 			});
@@ -152,7 +152,7 @@ class CoreXmlConfiguration extends XmlFileConfiguration implements CoreConfigura
 			mutateConfiguration(new Function<Element, Boolean>() {
 				@Override
 				public Boolean apply(Element prefs) throws Exception {
-					setElementValue(getOrCreateBrokerElement(prefs, broker.toString()), namespaceUri, key, value);
+					setElementValue(getOrCreateBrokerElement(prefs, broker.getPreferenceKey()), namespaceUri, key, value);
 					return true;
 				}
 			});
@@ -162,7 +162,7 @@ class CoreXmlConfiguration extends XmlFileConfiguration implements CoreConfigura
 	}
 	
 	public void setBrokerCredentials(final JMSBroker broker, final Credentials credentials) {
-		Configuration brokerSection = sub("Broker", "name", broker.toString());
+		Configuration brokerSection = sub("Broker", "name", broker.getPreferenceKey());
 		brokerSection.del("credentials"); // Delete the existing credentials to prevent mixing properties 
                                           // between different implementations of Credentials interface
 		Configuration credentialsSection = brokerSection.sub("credentials", "class", credentials.getClass().getName());
@@ -171,7 +171,7 @@ class CoreXmlConfiguration extends XmlFileConfiguration implements CoreConfigura
 
 	public Credentials getBrokerCredentials(JMSBroker broker) {
 		// Get the credentials object in the broker asked for
-		Configuration brokerSection = sub("Broker", "name", broker.toString());
+		Configuration brokerSection = sub("Broker", "name", broker.getPreferenceKey());
 		Configuration credentialsSection = brokerSection.sub("credentials");
 		String className = credentialsSection.getAttr("class", null);
 		if(!Strings.isNullOrEmpty(className)) {
@@ -207,7 +207,7 @@ class CoreXmlConfiguration extends XmlFileConfiguration implements CoreConfigura
 				@Override
 				public List<String> apply(Element prefs) throws Exception {
 					String expr = String.format("/c:%s/c:Broker[@name='%s']/c:Subscribers/c:Subscriber", 
-							rootElementName, broker.toString());
+							rootElementName, broker.getPreferenceKey());
 					return getNodeValues(prefs, expr);
 				}
 			});
@@ -226,7 +226,7 @@ class CoreXmlConfiguration extends XmlFileConfiguration implements CoreConfigura
 				@Override
 				public List<String> apply(Element prefs) throws Exception {
 					String expr = String.format("/c:%s/c:Broker[@name='%s']/c:Publishers/c:Publisher", 
-							rootElementName, broker.toString());
+							rootElementName, broker.getPreferenceKey());
 					return getNodeValues(prefs, expr);
 				}
 			});
@@ -244,7 +244,7 @@ class CoreXmlConfiguration extends XmlFileConfiguration implements CoreConfigura
 			mutateConfiguration(new Function<Element, Boolean>() {
 				@Override
 				public Boolean apply(Element prefs) throws Exception {
-					Element brokerElement = getOrCreateBrokerElement(prefs, topic.getBroker().toString()); 
+					Element brokerElement = getOrCreateBrokerElement(prefs, topic.getBroker().getPreferenceKey()); 
 					Element subscribersElement = getOrCreateElement(brokerElement, namespaceUri, "Subscribers", null, null);
 					
 					// Check to see if this topic is already saved. Ignore if it already exists.
@@ -271,7 +271,7 @@ class CoreXmlConfiguration extends XmlFileConfiguration implements CoreConfigura
 			mutateConfiguration(new Function<Element, Boolean>() {
 				@Override
 				public Boolean apply(Element prefs) throws Exception {
-					Element brokerElement = getOrCreateBrokerElement(prefs, topic.getBroker().toString()); 
+					Element brokerElement = getOrCreateBrokerElement(prefs, topic.getBroker().getPreferenceKey()); 
 					Element publishersElement = getOrCreateElement(brokerElement, namespaceUri, "Publishers", null, null);
 					
 					// Check to see if this topic is already saved. Ignore if it already exists.
@@ -298,7 +298,7 @@ class CoreXmlConfiguration extends XmlFileConfiguration implements CoreConfigura
 	public void removeTopicSubscriber(JMSTopic topic) {
 		removePrefNode(String.format(
 			"/c:%s/c:Broker[@name='%s']/c:Subscribers/c:Subscriber[text()='%s']", 
-			rootElementName, topic.getBroker().toString(), topic.getName()));
+			rootElementName, topic.getBroker().getPreferenceKey(), topic.getName()));
 	}
 	
 	/* (non-Javadoc)
@@ -307,7 +307,7 @@ class CoreXmlConfiguration extends XmlFileConfiguration implements CoreConfigura
 	public void removeTopicPublisher(JMSTopic topic) {
 		removePrefNode(String.format(
 			"/c:%s/c:Broker[@name='%s']/c:Publishers/c:Publisher[text()='%s']", 
-			rootElementName, topic.getBroker().toString(), topic.getName()));
+			rootElementName, topic.getBroker().getPreferenceKey(), topic.getName()));
 	}
 
 	/**

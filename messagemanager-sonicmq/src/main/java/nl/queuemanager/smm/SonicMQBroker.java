@@ -31,16 +31,40 @@ class SonicMQBroker implements Comparable<JMSBroker>, JMSBroker {
 	private final String containerHost;
 	private final ROLE role;
 
+	/** Resolves this broker's connection URL, quietly - see {@link #getPreferenceKey()}. */
+	interface UrlResolver {
+		void resolve(SonicMQBroker broker);
+	}
+
 	// Resolved lazily on first connect; enumerating acceptor configuration for
 	// every broker makes listing large domains take minutes.
 	private volatile String brokerURL;
+	private final UrlResolver urlResolver;
+
+	// Resolution is attempted at most once. Besides avoiding a retry on every lookup, this
+	// breaks a cycle: resolving falls back to the configured alternate URL when the broker's
+	// acceptor cannot be read, and reading that preference asks for this key again.
+	private volatile boolean urlResolutionAttempted;
+
+	// The name the broker carries in the DOMAIN CONFIGURATION, which is what earlier versions
+	// built the preference key from. It comes from the same configuration bean as the URL and
+	// is resolved with it. Kept apart from brokerName because that one identifies this object
+	// (equals/hashCode) and is a key in maps of live connections and of task queues - it must
+	// never change once the broker has been handed out.
+	private volatile String configuredName;
 
 	public SonicMQBroker(ObjectName objectName, String brokerName, String configStorageName, String containerHost, ROLE role) {
+		this(objectName, brokerName, configStorageName, containerHost, role, null);
+	}
+
+	public SonicMQBroker(ObjectName objectName, String brokerName, String configStorageName, String containerHost,
+			ROLE role, UrlResolver urlResolver) {
 		this.objectName        = objectName;
 		this.brokerName        = brokerName;
 		this.configStorageName = configStorageName;
 		this.containerHost     = containerHost;
 		this.role              = role;
+		this.urlResolver       = urlResolver;
 	}
 
 	private String sanitizeBrokerUrl(String connectionUrl) {
@@ -64,6 +88,14 @@ class SonicMQBroker implements Comparable<JMSBroker>, JMSBroker {
 		this.brokerURL = sanitizeBrokerUrl(connectionUrl);
 	}
 
+	/**
+	 * The broker's name as configured in the domain - see {@link #configuredName}. Set while
+	 * resolving the URL, from the same configuration bean.
+	 */
+	public void setConfiguredName(String configuredName) {
+		this.configuredName = configuredName;
+	}
+
 	public String getConfigStorageName() {
 		return configStorageName;
 	}
@@ -80,11 +112,51 @@ class SonicMQBroker implements Comparable<JMSBroker>, JMSBroker {
 		return role;
 	}
 
+	/**
+	 * {@code <brokerName> (<connectionUrl>)} - the format this application has always stored
+	 * per-broker settings under, so existing configurations keep working.
+	 * <p>
+	 * The connection URL is the only part of a broker's identity that is reliably unique.
+	 * Two environments are routinely clones of one another: same domain name, same container
+	 * names, same broker names, and they may even share a machine and differ only by port.
+	 * That defeats the broker name, the container host and the runtime ObjectName alike - but
+	 * not the acceptor URL, which carries the port.
+	 * <p>
+	 * The URL is resolved on demand here because settings are read before the broker is
+	 * connected (topic lists when it is selected, credentials just before connecting). The
+	 * result is cached on this instance, so this costs one resolution for each broker the
+	 * user actually opens - never for the rest of the list, which is what keeps enumerating
+	 * a large domain fast. {@link #toString()} deliberately does NOT resolve: it is called
+	 * for every broker in the list.
+	 */
+	@Override
+	public String getPreferenceKey() {
+		String url = brokerURL;
+
+		if(url == null && urlResolver != null && !urlResolutionAttempted) {
+			urlResolutionAttempted = true;
+			urlResolver.resolve(this);
+			url = brokerURL;
+		}
+
+		final String name = configuredName != null ? configuredName : brokerName;
+
+		// A broker whose URL cannot be resolved cannot be connected to either; fall back to
+		// something that is at least stable rather than to the bare (colliding) name.
+		return url != null
+				? name + " (" + url + ")"
+				: name + " (" + containerHost + ")";
+	}
+
 	@Override
 	public String toString() {
-		// Must be stable regardless of whether the URL has been resolved yet:
-		// this value is the display name and the per-broker preferences key.
-		return getBrokerName();
+		// Purely the display label - see getPreferenceKey() for what settings are stored
+		// under. The container host is shown because a domain may run brokers of the same
+		// name on several machines; it is known from the collective state, while the broker
+		// URL is only resolved once a broker is selected.
+		return containerHost == null || containerHost.length() == 0
+				? getBrokerName()
+				: getBrokerName() + " (" + containerHost + ")";
 	}
 
 	public int compareTo(JMSBroker other) {

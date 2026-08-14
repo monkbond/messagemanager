@@ -239,7 +239,8 @@ public class Domain implements JMSDomain {
 							brokerName,
 							ci.getName(),
 							containerState.getContainerHost(),
-							role));
+							role,
+							this::resolveBrokerUrlQuietly));
 					brokersFound++;
 				}
 			}
@@ -319,6 +320,20 @@ public class Domain implements JMSDomain {
 	}
 
 	/**
+	 * Resolve a broker's URL for {@link SonicMQBroker#getPreferenceKey()}, which needs it to
+	 * build the key but has no way to report a failure. A broker whose URL cannot be resolved
+	 * cannot be connected to either, so the connect attempt is where the user finds out.
+	 */
+	private void resolveBrokerUrlQuietly(SonicMQBroker broker) {
+		try {
+			resolveBrokerUrl(broker);
+		} catch (JMSException e) {
+			System.out.println("Unable to resolve the URL of broker " + broker.getBrokerName()
+					+ " while looking up its settings: " + e);
+		}
+	}
+
+	/**
 	 * Resolve the JMS connection URL of a broker by loading its configuration
 	 * beans from the Directory Service. Deliberately done lazily on first
 	 * connect instead of during enumeration: it costs many management round
@@ -336,12 +351,18 @@ public class Domain implements JMSDomain {
 			String logicalName = dsProxy.storageToLogical(broker.getConfigStorageName());
 			logicalName = logicalName.substring(0, logicalName.lastIndexOf('/'));
 
-			// Find all acceptors for this broker and use the first TCP acceptor
+			// Find all acceptors for this broker and use the first TCP acceptor. The broker's
+			// CONFIGURED name is taken from the same bean: it is what earlier versions stored
+			// per-broker settings under, so taking it from here keeps those settings findable.
 			IAcceptorsBean acceptorsBean;
 			if(broker.getRole() == SonicMQBroker.ROLE.BACKUP) {
-				acceptorsBean = beanFactory.getBackupBrokerBean(logicalName).getAcceptorsBean();
+				IBackupBrokerBean bean = beanFactory.getBackupBrokerBean(logicalName);
+				acceptorsBean = bean.getAcceptorsBean();
+				broker.setConfiguredName(bean.getPrimaryBrokerBean().getBrokerName() + " (Backup)");
 			} else {
-				acceptorsBean = beanFactory.getBrokerBean(logicalName).getAcceptorsBean();
+				IBrokerBean bean = beanFactory.getBrokerBean(logicalName);
+				acceptorsBean = bean.getAcceptorsBean();
+				broker.setConfiguredName(bean.getBrokerName());
 			}
 
 			IAcceptorTcpsBean acceptor = getPrimaryAcceptor(acceptorsBean);

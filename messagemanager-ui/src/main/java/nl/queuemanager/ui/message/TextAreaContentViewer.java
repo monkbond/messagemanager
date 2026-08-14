@@ -11,13 +11,13 @@ import org.fife.ui.rtextarea.SearchEngine;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
+import javax.swing.BoxLayout;
 import javax.swing.ButtonGroup;
 import javax.swing.JComponent;
+import javax.swing.JLabel;
 import javax.swing.JPanel;
-import javax.swing.JToggleButton;
+import javax.swing.JRadioButton;
 import java.awt.BorderLayout;
-import java.awt.Dimension;
-import java.awt.FlowLayout;
 
 abstract class TextAreaContentViewer<T> implements ContentViewer<T> {
 
@@ -77,7 +77,7 @@ abstract class TextAreaContentViewer<T> implements ContentViewer<T> {
 	private JComponent createFormatSwitch(final RSyntaxTextArea area, final ContentFormatter.Content content) {
 		final boolean showRaw = isShowRawByDefault();
 
-		final JToggleButton formattedButton = new JToggleButton("Formatted", !showRaw);
+		final JRadioButton formattedButton = new JRadioButton("Formatted", !showRaw);
 		formattedButton.setToolTipText(content.isMalformed()
 				? "Explain why this content cannot be formatted"
 				: "Show the " + content.getKind() + " content indented for reading");
@@ -86,7 +86,7 @@ abstract class TextAreaContentViewer<T> implements ContentViewer<T> {
 			showContent(area, content, false);
 		});
 
-		final JToggleButton rawButton = new JToggleButton("Raw", showRaw);
+		final JRadioButton rawButton = new JRadioButton("Raw", showRaw);
 		rawButton.setToolTipText("Show the content exactly as it is in the message");
 		rawButton.addActionListener(e -> {
 			setShowRawByDefault(true);
@@ -97,11 +97,15 @@ abstract class TextAreaContentViewer<T> implements ContentViewer<T> {
 		group.add(formattedButton);
 		group.add(rawButton);
 
-		JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+		// Same shape as the "Message Content:" choice on the message sender: a label
+		// followed by the alternatives, laid out along the x axis.
+		JPanel panel = new JPanel();
+		panel.setLayout(new BoxLayout(panel, BoxLayout.X_AXIS));
 		panel.setBorder(BorderFactory.createEmptyBorder(0, 0, 3, 0));
+		panel.add(new JLabel("View: "));
 		panel.add(formattedButton);
-		panel.add(Box.createRigidArea(new Dimension(3, 0)));
 		panel.add(rawButton);
+		panel.add(Box.createHorizontalGlue());
 		return panel;
 	}
 
