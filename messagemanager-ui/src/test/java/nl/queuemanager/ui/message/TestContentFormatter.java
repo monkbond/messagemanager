@@ -4,6 +4,7 @@ import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -119,6 +120,43 @@ public class TestContentFormatter {
 		assertTrue("the content itself is untouched", content.getFormatted().endsWith(content.getRaw()));
 	}
 
+	/** The position is carried separately from the message so the viewer can mark the spot. */
+	@Test
+	public void theFailingPositionIsReported() {
+		ContentFormatter.Content json = ContentFormatter.analyze("{\"a\":1,\"b\":[1,2}");
+		assertEquals(1, json.getProblemLine());
+		assertEquals(16, json.getProblemColumn());
+
+		ContentFormatter.Content multiLine =
+				ContentFormatter.analyze("{\n  \"a\": 1,\n  \"b\": [1,2}\n}");
+		assertEquals("the line the '}' is on", 3, multiLine.getProblemLine());
+
+		ContentFormatter.Content xml = ContentFormatter.analyze("<root><a>1</a>");
+		assertEquals(1, xml.getProblemLine());
+		assertTrue("the parser's column is carried through", xml.getProblemColumn() > 0);
+	}
+
+	/**
+	 * Only the FIRST failure is reported. Neither parser can carry on meaningfully once the
+	 * structure breaks - anything after it would be a guess about what the author meant.
+	 */
+	@Test
+	public void onlyTheFirstFailureIsReported() {
+		// Two problems: a '}' closing an array, and a stray ']' later on.
+		ContentFormatter.Content content = ContentFormatter.analyze("{\"a\":[1,2},\"b\":3]}");
+
+		assertEquals("reports the first one", 10, content.getProblemColumn());
+		assertTrue(content.getProblem(), content.getProblem().contains("Found '}'"));
+	}
+
+	@Test
+	public void wellFormedContentReportsNoPosition() {
+		ContentFormatter.Content content = ContentFormatter.analyze("{\"a\":1}");
+
+		assertEquals(0, content.getProblemLine());
+		assertEquals(0, content.getProblemColumn());
+	}
+
 	@Test
 	public void unterminatedJsonStringIsExplained() {
 		ContentFormatter.Content content = ContentFormatter.analyze("{\"a\":\"unterminated");
@@ -162,6 +200,89 @@ public class TestContentFormatter {
 	}
 
 	// ----------------------------------------------------------- other
+
+	// ------------------------------------------ control characters
+
+	/** The case from the field: an STX inside element text, which XML does not allow. */
+	@Test
+	public void aControlCharacterIsNamedAsTheLikelyCause() {
+		ContentFormatter.Content content = ContentFormatter.analyze("<r><Charge>3M\u00023P</Charge></r>");
+
+		assertTrue(content.isMalformed());
+		assertTrue(content.getProblem(), content.getProblem().contains("STX at line 1, column 14"));
+		assertTrue(content.getProblem(), content.getProblem().contains("1 non-printable character"));
+		// The excerpt is what makes it findable in a document held on one long line.
+		assertTrue(content.getProblem(), content.getProblem().contains("<Charge>3M[STX]3P</Charge>"));
+	}
+
+	/** A line and column is no help in a ten-thousand-character line; the excerpt is. */
+	@Test
+	public void eachControlCharacterIsQuotedInContext() {
+		StringBuilder padding = new StringBuilder();
+		while(padding.length() < 9000) {
+			padding.append("<Zusatzbezeichnung1></Zusatzbezeichnung1>");
+		}
+		String raw = "<r>" + padding + "<Charge>3M\u00023P 8</Charge></r>";
+
+		String described = ContentFormatter.describeControlCharacters(raw);
+
+		assertTrue(described, described.contains("<Charge>3M[STX]3P 8</Charge>"));
+		assertTrue("the excerpt is bounded", described.length() < 400);
+	}
+
+	@Test
+	public void anExcerptStaysOnOneLine() {
+		String excerpt = ContentFormatter.excerptAround("a\nb\u0002c\nd", 3);
+
+		assertFalse("newlines are flattened", excerpt.contains("\n"));
+		assertTrue(excerpt, excerpt.contains("[STX]"));
+	}
+
+	@Test
+	public void everyControlCharacterIsCounted() {
+		String described = ContentFormatter.describeControlCharacters("a\u0002b\u0000c\u001Fd");
+
+		assertTrue(described, described.contains("3 non-printable characters"));
+		assertTrue(described, described.contains("STX"));
+		assertTrue(described, described.contains("NUL"));
+		assertTrue(described, described.contains("US"));
+	}
+
+	@Test
+	public void manyControlCharactersAreSummarised() {
+		String described = ContentFormatter.describeControlCharacters("\u0002\u0002\u0002\u0002\u0002\u0002\u0002");
+
+		assertTrue(described, described.contains("7 non-printable characters"));
+		assertTrue(described, described.contains("and 2 more"));
+	}
+
+	/** Tab, newline and carriage return are layout - marking them would bury the rest. */
+	@Test
+	public void layoutWhitespaceIsNotTreatedAsNonPrintable() {
+		assertNull(ContentFormatter.describeControlCharacters("a\tb\r\nc"));
+
+		assertFalse(ContentFormatter.isNonPrintable('\t'));
+		assertFalse(ContentFormatter.isNonPrintable('\n'));
+		assertFalse(ContentFormatter.isNonPrintable('\r'));
+		assertFalse(ContentFormatter.isNonPrintable('a'));
+		assertFalse(ContentFormatter.isNonPrintable('\u00e4'));
+		assertTrue(ContentFormatter.isNonPrintable('\u0002'));
+		assertTrue(ContentFormatter.isNonPrintable('\u007f'));
+	}
+
+	@Test
+	public void controlCharactersAreNamedTheUsualWay() {
+		assertEquals("NUL", ContentFormatter.nameOf('\u0000'));
+		assertEquals("STX", ContentFormatter.nameOf('\u0002'));
+		assertEquals("ESC", ContentFormatter.nameOf('\u001b'));
+		assertEquals("DEL", ContentFormatter.nameOf('\u007f'));
+		assertEquals("U+0085", ContentFormatter.nameOf('\u0085'));
+	}
+
+	@Test
+	public void contentWithoutControlCharactersSaysNothing() {
+		assertNull(ContentFormatter.describeControlCharacters("<r><a>1</a></r>"));
+	}
 
 	@Test
 	public void plainTextOffersNoSwitch() {

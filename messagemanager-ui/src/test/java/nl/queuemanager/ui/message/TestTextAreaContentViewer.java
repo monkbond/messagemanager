@@ -164,6 +164,140 @@ public class TestTextAreaContentViewer {
 	}
 
 	/** Malformed content keeps the switch, because the formatted view explains the problem. */
+	/** The offset the failing character is painted at, in both views. */
+	@Test
+	public void theFailingPositionMapsToACharacter() {
+		String text = "{\n  \"a\": 1,\n  \"b\": [1,2}\n}";
+
+		// line 3 is '  "b": [1,2}' - the offending brace is its 12th character
+		int offset = TextAreaContentViewer.offsetOf(text, 3, 12);
+		assertEquals('}', text.charAt(offset));
+
+		assertEquals("first character", 0, TextAreaContentViewer.offsetOf(text, 1, 1));
+		assertEquals("no position known", -1, TextAreaContentViewer.offsetOf(text, 0, 0));
+		assertEquals("empty content", -1, TextAreaContentViewer.offsetOf("", 1, 1));
+
+		// Parsers often report the position just PAST the offending construct; that must
+		// still land on a character rather than being dropped.
+		assertEquals(text.length() - 1, TextAreaContentViewer.offsetOf(text, 4, 99));
+		assertEquals("line beyond the end", -1, TextAreaContentViewer.offsetOf(text, 99, 1));
+	}
+
+	@Test
+	public void theFailingCharacterIsMarkedInBothViews() throws Exception {
+		String raw = "{\"a\":1,\"b\":[1,2}";
+		JComponent ui = viewer.createUI(message(raw));
+		RSyntaxTextArea area = textAreaOf(ui);
+
+		// Formatted view: the content sits below the note, so the mark has to be shifted.
+		int formatted = area.getHighlighter().getHighlights().length;
+		assertTrue("a mark is painted in the formatted view", formatted > 0);
+		int marked = area.getHighlighter().getHighlights()[formatted - 1].getStartOffset();
+		assertEquals("marks the offending '}'", '}', area.getText().charAt(marked));
+
+		button(ui, "Raw").doClick();
+		int raws = area.getHighlighter().getHighlights().length;
+		assertTrue("a mark is painted in the raw view", raws > 0);
+		int rawMarked = area.getHighlighter().getHighlights()[raws - 1].getStartOffset();
+		assertEquals("marks the offending '}'", '}', area.getText().charAt(rawMarked));
+		assertEquals("which is the last character of this content", raw.length() - 1, rawMarked);
+	}
+
+	/** Every control character is marked, not just the first - they usually come in groups. */
+	@Test
+	public void everyControlCharacterIsMarked() throws Exception {
+		JComponent ui = viewer.createUI(message("<r><a>3M\u00023P</a><b>x\u0000y</b></r>"));
+		RSyntaxTextArea area = textAreaOf(ui);
+
+		// Distinct positions: the first control character is ALSO where parsing failed, so it
+		// carries the problem mark as well as the control mark.
+		java.util.Set<Integer> marked = new java.util.HashSet<Integer>();
+		for(javax.swing.text.Highlighter.Highlight h : area.getHighlighter().getHighlights()) {
+			if(ContentFormatter.isNonPrintable(area.getText().charAt(h.getStartOffset()))) {
+				marked.add(h.getStartOffset());
+			}
+		}
+		assertEquals("both control characters marked", 2, marked.size());
+	}
+
+	@Test
+	public void controlCharactersAreMarkedInTheRawViewToo() throws Exception {
+		String raw = "<r><a>3M\u00023P</a></r>";
+		JComponent ui = viewer.createUI(message(raw));
+		RSyntaxTextArea area = textAreaOf(ui);
+
+		button(ui, "Raw").doClick();
+		assertEquals("the raw view is untouched", raw, area.getText());
+
+		boolean marked = false;
+		for(javax.swing.text.Highlighter.Highlight h : area.getHighlighter().getHighlights()) {
+			if(area.getText().charAt(h.getStartOffset()) == '\u0002') {
+				marked = true;
+			}
+		}
+		assertTrue("the STX is marked in the raw view", marked);
+	}
+
+	/**
+	 * A message that could not be formatted keeps whatever line structure it arrived with,
+	 * and one held on a single enormous line hides its marks off to the right.
+	 */
+	@Test
+	public void anEnormousLineIsWrappedSoTheMarksCanBeReached() {
+		StringBuilder oneLongLine = new StringBuilder("<r>");
+		while(oneLongLine.length() < 2000) {
+			oneLongLine.append("<a>x</a>");
+		}
+
+		assertTrue(TextAreaContentViewer.hasUnreadablyLongLine(oneLongLine.toString()));
+		assertFalse("formatted content is never wrapped",
+				TextAreaContentViewer.hasUnreadablyLongLine("<a>\n  <b>1</b>\n</a>"));
+		assertFalse("nor is short content", TextAreaContentViewer.hasUnreadablyLongLine("short"));
+		assertFalse("nor is empty content", TextAreaContentViewer.hasUnreadablyLongLine(""));
+
+		// A long line anywhere counts, not just the first.
+		assertTrue(TextAreaContentViewer.hasUnreadablyLongLine("short\n" + oneLongLine));
+	}
+
+	/** Landing on the problem, not at the top - the point of the mark is to be seen. */
+	@Test
+	public void theViewLandsOnTheProblem() throws Exception {
+		String raw = "{\"a\":1,\"b\":[1,2}";
+		JComponent ui = viewer.createUI(message(raw));
+		RSyntaxTextArea area = textAreaOf(ui);
+
+		assertEquals("caret is on the offending character", '}',
+				area.getText().charAt(area.getCaretPosition()));
+
+		button(ui, "Raw").doClick();
+		assertEquals("and again after switching view", '}',
+				area.getText().charAt(area.getCaretPosition()));
+	}
+
+	/** Content that parses but carries a control character still has somewhere worth landing. */
+	@Test
+	public void theViewLandsOnAControlCharacterWhenThereIsNoParseFailure() throws Exception {
+		JComponent ui = viewer.createUI(message("plain text with a \u0002 in it"));
+		RSyntaxTextArea area = textAreaOf(ui);
+
+		assertEquals('\u0002', area.getText().charAt(area.getCaretPosition()));
+	}
+
+	@Test
+	public void contentWithNothingWrongStartsAtTheTop() throws Exception {
+		JComponent ui = viewer.createUI(message(RAW));
+
+		assertEquals(0, textAreaOf(ui).getCaretPosition());
+	}
+
+	@Test
+	public void wellFormedContentIsNotMarked() throws Exception {
+		JComponent ui = viewer.createUI(message(RAW));
+		RSyntaxTextArea area = textAreaOf(ui);
+
+		assertEquals(0, area.getHighlighter().getHighlights().length);
+	}
+
 	@Test
 	public void malformedContentKeepsTheSwitchAndExplainsItself() throws Exception {
 		JComponent ui = viewer.createUI(message("{\"a\":1,\"b\":[1,2}"));

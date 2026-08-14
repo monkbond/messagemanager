@@ -86,12 +86,22 @@ final class ContentFormatter {
 		}
 	}
 
-	/** Raised when content of a known kind cannot be parsed, carrying what was wrong with it. */
+	/** Raised when content of a known kind cannot be parsed, carrying what was wrong and where. */
 	private static final class MalformedException extends Exception {
 		private static final long serialVersionUID = 1L;
 
+		/** 1-based position in the RAW content; 0 when the parser did not say. */
+		private final int line;
+		private final int column;
+
 		MalformedException(String message) {
+			this(message, 0, 0);
+		}
+
+		MalformedException(String message, int line, int column) {
 			super(message);
+			this.line = line;
+			this.column = column;
 		}
 	}
 
@@ -101,12 +111,31 @@ final class ContentFormatter {
 		private final String formatted;
 		private final Kind kind;
 		private final String problem;
+		private final int problemLine;
+		private final int problemColumn;
 
 		private Content(String raw, String formatted, Kind kind, String problem) {
+			this(raw, formatted, kind, problem, 0, 0);
+		}
+
+		private Content(String raw, String formatted, Kind kind, String problem, int problemLine,
+				int problemColumn) {
 			this.raw = raw;
 			this.formatted = formatted;
 			this.kind = kind;
 			this.problem = problem;
+			this.problemLine = problemLine;
+			this.problemColumn = problemColumn;
+		}
+
+		/** 1-based line in the RAW content where parsing failed, or 0 when it is not known. */
+		int getProblemLine() {
+			return problemLine;
+		}
+
+		/** 1-based column in the RAW content where parsing failed, or 0 when it is not known. */
+		int getProblemColumn() {
+			return problemColumn;
 		}
 
 		String getRaw() {
@@ -163,7 +192,7 @@ final class ContentFormatter {
 			try {
 				return new Content(raw, formatXml(raw, nesting, nesting == 0), Kind.XML, null);
 			} catch (MalformedException e) {
-				return malformed(raw, Kind.XML, e.getMessage(), nesting);
+				return malformed(raw, Kind.XML, e, nesting);
 			}
 		}
 
@@ -171,7 +200,7 @@ final class ContentFormatter {
 			try {
 				return new Content(raw, formatJson(raw), Kind.JSON, null);
 			} catch (MalformedException e) {
-				return malformed(raw, Kind.JSON, e.getMessage(), nesting);
+				return malformed(raw, Kind.JSON, e, nesting);
 			}
 		}
 
@@ -186,11 +215,124 @@ final class ContentFormatter {
 	 * EMBEDDED content is left completely alone: a note injected into a CDATA section would
 	 * be writing our own words into what is supposed to be the message's data.
 	 */
-	private static Content malformed(String raw, Kind kind, String problem, int nesting) {
+	private static Content malformed(String raw, Kind kind, MalformedException problem, int nesting) {
 		if(nesting > 0) {
 			return new Content(raw, null, Kind.PLAIN, null);
 		}
-		return new Content(raw, note(kind, problem) + raw, kind, problem);
+
+		// A stray control character is a common cause and an invisible one, so say it out
+		// loud rather than leaving the user to wonder why a document that looks fine fails.
+		String message = problem.getMessage();
+		String controls = describeControlCharacters(raw);
+		if(controls != null) {
+			message = message + "\n" + controls;
+		}
+
+		return new Content(raw, note(kind, message) + raw, kind, message,
+				problem.line, problem.column);
+	}
+
+	/** How many control characters to name individually before summarising the rest. */
+	private static final int MAX_NAMED_CONTROL_CHARACTERS = 5;
+
+	/** How much text to show either side of a control character so it can be placed. */
+	private static final int EXCERPT_RADIUS = 30;
+
+	/**
+	 * Names the non-printable characters in the content, which neither XML nor JSON allows
+	 * unescaped and which nothing on screen would otherwise reveal.
+	 * <p>
+	 * Each one is quoted IN CONTEXT. A line and column is no help in a document that is one
+	 * ten-thousand-character line, whereas the surrounding text says immediately which field
+	 * the character sits in.
+	 *
+	 * @return a description, or null when the content has none
+	 */
+	static String describeControlCharacters(String content) {
+		StringBuilder found = new StringBuilder();
+		int count = 0;
+
+		for(int i = 0; i < content.length(); i++) {
+			if(!isNonPrintable(content.charAt(i))) {
+				continue;
+			}
+			count++;
+			if(count <= MAX_NAMED_CONTROL_CHARACTERS) {
+				int[] at = lineAndColumn(content, i);
+				found.append("\n  ").append(nameOf(content.charAt(i)))
+					.append(" at line ").append(at[0]).append(", column ").append(at[1])
+					.append(": ").append(excerptAround(content, i));
+			}
+		}
+
+		if(count == 0) {
+			return null;
+		}
+
+		StringBuilder result = new StringBuilder("The content also holds ").append(count)
+				.append(count == 1 ? " non-printable character" : " non-printable characters")
+				.append(", which is not allowed here. Each one is marked in the text:")
+				.append(found);
+		if(count > MAX_NAMED_CONTROL_CHARACTERS) {
+			result.append("\n  ... and ").append(count - MAX_NAMED_CONTROL_CHARACTERS).append(" more");
+		}
+		return result.toString();
+	}
+
+	/**
+	 * The text around the given position on a single line, with every non-printable character
+	 * in it written out by name so the excerpt reads as what it is.
+	 */
+	static String excerptAround(String content, int index) {
+		final int from = Math.max(0, index - EXCERPT_RADIUS);
+		final int to = Math.min(content.length(), index + EXCERPT_RADIUS + 1);
+
+		StringBuilder excerpt = new StringBuilder();
+		if(from > 0) {
+			excerpt.append("...");
+		}
+		for(int i = from; i < to; i++) {
+			final char c = content.charAt(i);
+			if(isNonPrintable(c)) {
+				excerpt.append('[').append(nameOf(c)).append(']');
+			} else if(c == '\n' || c == '\r' || c == '\t') {
+				excerpt.append(' '); // keep the excerpt on one line
+			} else {
+				excerpt.append(c);
+			}
+		}
+		if(to < content.length()) {
+			excerpt.append("...");
+		}
+		return excerpt.toString();
+	}
+
+	/**
+	 * Whether this character has no visible form. Tab, newline and carriage return are
+	 * excluded: they are layout, and marking every one of them would bury the rest.
+	 */
+	static boolean isNonPrintable(char c) {
+		if(c == '\t' || c == '\n' || c == '\r') {
+			return false;
+		}
+		return c < 0x20 || c == 0x7F || (c >= 0x80 && c <= 0x9F);
+	}
+
+	/** The usual abbreviation for a control character, or its code point. */
+	static String nameOf(char c) {
+		final String[] names = {
+			"NUL", "SOH", "STX", "ETX", "EOT", "ENQ", "ACK", "BEL",
+			"BS",  "HT",  "LF",  "VT",  "FF",  "CR",  "SO",  "SI",
+			"DLE", "DC1", "DC2", "DC3", "DC4", "NAK", "SYN", "ETB",
+			"CAN", "EM",  "SUB", "ESC", "FS",  "GS",  "RS",  "US"
+		};
+		if(c < names.length) {
+			return names[c];
+		}
+		if(c == 0x7F) {
+			return "DEL";
+		}
+		return String.format("U+%04X", (int)c);
 	}
 
 	/**
@@ -228,7 +370,7 @@ final class ContentFormatter {
 		try {
 			document = parse(xml);
 		} catch (SAXParseException e) {
-			throw new MalformedException(describe(e));
+			throw new MalformedException(describe(e), e.getLineNumber(), e.getColumnNumber());
 		} catch (Exception e) {
 			throw new MalformedException(e.toString());
 		}
@@ -418,8 +560,7 @@ final class ContentFormatter {
 			case '{':
 			case '[': {
 				if(depth >= stack.length) {
-					throw new MalformedException("Nested more than " + stack.length
-							+ " levels deep" + at(json, i));
+					throw malformedAt(json, i, "Nested more than " + stack.length + " levels deep");
 				}
 				out.append(c);
 				final char closer = c == '{' ? '}' : ']';
@@ -438,12 +579,12 @@ final class ContentFormatter {
 			case '}':
 			case ']':
 				if(depth == 0) {
-					throw new MalformedException("Unexpected '" + c
-							+ "' - there is nothing open to close" + at(json, i));
+					throw malformedAt(json, i,
+							"Unexpected '" + c + "' - there is nothing open to close");
 				}
 				if(stack[depth - 1] != c) {
-					throw new MalformedException("Found '" + c + "' where '" + stack[depth - 1]
-							+ "' was expected" + at(json, i));
+					throw malformedAt(json, i,
+							"Found '" + c + "' where '" + stack[depth - 1] + "' was expected");
 				}
 				depth--;
 				newLine(out, depth);
@@ -452,8 +593,7 @@ final class ContentFormatter {
 
 			case ',':
 				if(depth == 0) {
-					throw new MalformedException("Unexpected ',' outside any object or array"
-							+ at(json, i));
+					throw malformedAt(json, i, "Unexpected ',' outside any object or array");
 				}
 				out.append(c);
 				newLine(out, depth);
@@ -484,8 +624,8 @@ final class ContentFormatter {
 		return out.toString();
 	}
 
-	/** Where in the content something went wrong, in the terms an editor shows. */
-	private static String at(String content, int index) {
+	/** The 1-based line and column of the given index, in the terms an editor shows. */
+	private static int[] lineAndColumn(String content, int index) {
 		int line = 1;
 		int column = 1;
 		for(int i = 0; i < index && i < content.length(); i++) {
@@ -496,7 +636,14 @@ final class ContentFormatter {
 				column++;
 			}
 		}
-		return " (line " + line + ", column " + column + ")";
+		return new int[] {line, column};
+	}
+
+	/** A MalformedException whose message and position both point at the offending character. */
+	private static MalformedException malformedAt(String content, int index, String message) {
+		int[] at = lineAndColumn(content, index);
+		return new MalformedException(message + " (line " + at[0] + ", column " + at[1] + ")",
+				at[0], at[1]);
 	}
 
 	private static void newLine(StringBuilder out, int depth) {
